@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-st.title("📊 AI询盘系统（最终稳定版）")
+st.title("📊 AI询盘分析系统（修复稳定版）")
 
 file = st.file_uploader("上传Excel", type=["xlsx"])
 
@@ -15,55 +15,79 @@ if file:
     st.dataframe(df)
 
     # =========================
-    # 1. 自动找到 24周 / 23周列
+    # 1. 删除全空列（关键修复）
     # =========================
-    cols = df.columns.astype(str)
+    df = df.dropna(axis=1, how="all")
 
-    col_24 = [c for c in cols if "24" in c or "本周" in c]
-    col_23 = [c for c in cols if "23" in c or "上周" in c]
+    # =========================
+    # 2. 删除全空行
+    # =========================
+    df = df.dropna(axis=0, how="all")
 
-    if not col_24 or not col_23:
-        st.error("❌ 找不到24周/23周列，请检查Excel命名")
+    # =========================
+    # 3. 强制把数值列转数字
+    # =========================
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="ignore")
+
+    # =========================
+    # 4. 找最后两行（24周 vs 23周）
+    # =========================
+    numeric_df = df.select_dtypes(include=[np.number])
+
+    if len(numeric_df) < 2:
+        st.error("❌ 数据不足两行")
         st.stop()
 
-    col_24 = col_24[0]
-    col_23 = col_23[0]
+    last = numeric_df.iloc[-1]
+    prev = numeric_df.iloc[-2]
 
     # =========================
-    # 2. 数值清洗
+    # 5. 自动计算变化
     # =========================
-    df[col_24] = pd.to_numeric(df[col_24], errors="coerce")
-    df[col_23] = pd.to_numeric(df[col_23], errors="coerce")
+    result = []
+
+    for col in numeric_df.columns:
+
+        now = last[col]
+        before = prev[col]
+
+        diff = now - before
+
+        pct = (diff / before * 100) if before != 0 else None
+
+        result.append({
+            "指标": col,
+            "24周": now,
+            "23周": before,
+            "变化值": diff,
+            "变化率%": pct
+        })
+
+    result_df = pd.DataFrame(result)
 
     # =========================
-    # 3. 计算变化
+    # 6. 输出
     # =========================
-    df["变化值"] = df[col_24] - df[col_23]
+    st.subheader("📊 对比分析结果")
 
-    df["变化率%"] = np.where(
-        df[col_23] != 0,
-        (df["变化值"] / df[col_23]) * 100,
-        None
-    )
+    st.dataframe(result_df.sort_values("变化值", ascending=False))
 
     # =========================
-    # 4. 输出结果
+    # 7. 自动结论
     # =========================
-    st.subheader("📊 核心对比结果")
+    st.subheader("🧠 AI结论")
 
-    st.dataframe(df[["指标", col_24, col_23, "变化值", "变化率%"]])
+    # 找询盘
+    inquiry_cols = [c for c in numeric_df.columns if "询盘" in str(c)]
 
-    # =========================
-    # 5. 自动结论
-    # =========================
-    st.subheader("🧠 AI判断")
-
-    if "询盘" in df["指标"].astype(str).values:
-        row = df[df["指标"].astype(str).str.contains("询盘")].iloc[0]
-
-        diff = row["变化值"]
+    if inquiry_cols:
+        col = inquiry_cols[0]
+        diff = last[col] - prev[col]
 
         if diff > 0:
-            st.success(f"📈 询盘上涨：+{diff}")
+            st.success(f"📈 询盘上涨 +{diff}")
         else:
-            st.error(f"📉 询盘下降：{diff}")
+            st.error(f"📉 询盘下降 {diff}")
+    else:
+        st.warning("⚠️ 未找到询盘字段")
